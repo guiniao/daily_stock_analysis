@@ -28,6 +28,9 @@ concurrency:
   group: stock-analysis
   cancel-in-progress: false
 
+permissions:
+  contents: write
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -541,3 +544,12 @@ jobs:
             echo "📜 最近日志（最后 30 行）:"
             tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
           fi
+          
+      - name: 归档历史报告（供回测使用）
+        if: always()
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/ logs/
+          git commit -m "auto: 每日分析报告归档 $(date +%Y%m%d)" || echo "无新增报告，跳过提交"
+          git push
