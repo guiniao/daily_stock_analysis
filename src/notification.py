@@ -416,6 +416,9 @@ class NotificationService(
         report_date: Optional[str] = None,
     ) -> str:
         """Generate the aggregate report content used by merge/save/push paths."""
+        # Fork 扩展：暂存最近一次报告的 results，供飞书折叠卡片发送器读取
+        # （仅当 FEISHU_COLLAPSIBLE_CARD 开启时使用）。详见 feishu_collapsible.py。
+        self._last_feishu_results = results
         normalized_type = self._normalize_report_type(report_type)
         if normalized_type == ReportType.BRIEF:
             return self.generate_brief_report(results, report_date=report_date)

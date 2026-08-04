@@ -371,6 +371,23 @@ class FeishuSender:
         if content is None:
             logger.error("send_to_feishu: content 不能为 None")
             return False
+        # Fork 扩展：折叠面板卡片（仅 Webhook 模式）
+        # 当 FEISHU_COLLAPSIBLE_CARD 开启、且为 Webhook 模式、且本次报告的
+        # 结构化 results 可用时，改用"总览 + 每股一个 collapsible_panel"的
+        # 单卡发送（默认折叠，点击展开明细，面板互相独立）。
+        # 任何异常或前置条件不满足都回退原 markdown 路径，保证向后兼容。
+        if self._feishu_url:
+            try:
+                from src.notification_sender.feishu_collapsible import (
+                    is_collapsible_enabled,
+                )
+            except ImportError:
+                is_collapsible_enabled = None  # type: ignore[assignment]
+            if (is_collapsible_enabled and callable(is_collapsible_enabled)
+                    and is_collapsible_enabled()):
+                results = getattr(self, "_last_feishu_results", None)
+                if results:
+                    return self._send_collapsible_cards(results, timeout_seconds=timeout_seconds)
         if self._feishu_url:
             return self._send_via_webhook(content, timeout_seconds=timeout_seconds)
         return self._send_via_app_bot(content)
@@ -550,6 +567,115 @@ class FeishuSender:
             if i < total_chunks - 1:
                 time.sleep(1)
         return success_count == total_chunks
+
+    def _post_webhook_payload(self, payload: Dict[str, Any],
+                              *, timeout_seconds: Optional[float] = None) -> bool:
+        """POST a single webhook payload with security fields applied.
+
+        Shared low-level sender used by the legacy markdown path and the
+        collapsible-card path. Returns True only on Feishu ``code==0``.
+        """
+        security_fields = self._build_security_fields()
+        request_payload = dict(payload)
+        request_payload.update(security_fields)
+        try:
+            response = requests.post(
+                self._feishu_url,
+                json=request_payload,
+                timeout=timeout_seconds or _WEBHOOK_SEND_TIMEOUT_SECONDS,
+                verify=self._webhook_verify_ssl,
+            )
+        except (requests.exceptions.ConnectionError,
+                 requests.exceptions.Timeout,
+                 requests.exceptions.RequestException) as e:
+            logger.error("飞书 Webhook 网络请求异常: %s", e)
+            return False
+        if response.status_code == 200:
+            try:
+                result = response.json()
+            except (ValueError, AttributeError):
+                logger.error("飞书 Webhook 返回非 JSON 响应: %s", response.text[:200])
+                return False
+            if not isinstance(result, dict):
+                logger.error("飞书 Webhook 返回非预期格式: %s", type(result).__name__)
+                return False
+            code = result.get("code") if "code" in result else result.get("StatusCode")
+            if code == 0:
+                logger.info("飞书 Webhook 消息发送成功")
+                return True
+            logger.error(
+                "飞书 Webhook 返回错误 [code=%s]: %s",
+                code,
+                result.get("msg") or result.get("StatusMessage", "未知错误"),
+            )
+            return False
+        logger.error("飞书 Webhook 请求失败: HTTP %d", response.status_code)
+        return False
+
+    def _send_collapsible_cards(self, results: list,
+                                *, timeout_seconds: Optional[float] = None) -> bool:
+        """Build and send collapsible-panel cards (Fork extension).
+
+        一张卡：顶部总览 + 每只股票一个 collapsible_panel（默认折叠）。
+        股票过多/超限时自动分多张卡。任何构建异常都回退原 markdown 发送，
+        保证报告不丢。
+        """
+        from src.notification_sender.feishu_collapsible import build_cards
+
+        try:
+            cards = build_cards(self, results)
+        except Exception as e:  # pragma: no cover - defensive fallback
+            logger.error("折叠卡片构建失败，回退普通文本: %s: %s", type(e).__name__, e)
+            return self._send_via_webhook(
+                self._results_to_plain_fallback(results),
+                timeout_seconds=timeout_seconds,
+            )
+
+        if not cards:
+            return False
+
+        # Fork 扩展：先发一条"新消息分隔条"卡片，与上一次推送在视觉上隔开。
+        from src.notification_sender.feishu_collapsible import build_separator_card
+
+        keyword_prefix = self._get_keyword_prefix()
+        total = len(cards)
+        success = True
+
+        separator = build_separator_card()
+        sep_payload: Dict[str, Any] = {"msg_type": "interactive", "card": separator}
+        if keyword_prefix:
+            sep_payload["card"]["header"]["title"]["content"] = (
+                f"{keyword_prefix}🆕 新消息"
+            )
+        if not self._post_webhook_payload(sep_payload, timeout_seconds=timeout_seconds):
+            logger.warning("新消息分隔条发送失败（不影响后续卡片发送）")
+        time.sleep(1)
+
+        for i, card in enumerate(cards):
+            payload: Dict[str, Any] = {"msg_type": "interactive", "card": card}
+            # keyword 前缀加到首张卡片 header。
+            if i == 0 and keyword_prefix:
+                header = payload["card"].get("header") or {}
+                title = header.get("title") or {}
+                content = title.get("content") or ""
+                title["content"] = f"{keyword_prefix}{content}" if content else keyword_prefix
+                header["title"] = title
+                payload["card"]["header"] = header
+            if not self._post_webhook_payload(payload, timeout_seconds=timeout_seconds):
+                logger.error("折叠卡片第 %d/%d 张发送失败", i + 1, total)
+                success = False
+            if i < total - 1:
+                time.sleep(1)
+        return success
+
+    @staticmethod
+    def _results_to_plain_fallback(results: list) -> str:
+        """Best-effort plain-text fallback when collapsible card construction fails."""
+        lines = ["📊 股票智能分析报告（折叠卡片构建失败，纯文本回退）", ""]
+        for r in sorted(results, key=lambda x: getattr(x, "sentiment_score", 0), reverse=True):
+            name = getattr(r, "name", "") or r.code
+            lines.append(f"• {name}({r.code}): 评分 {getattr(r, 'sentiment_score', 'N/A')}")
+        return "\n".join(lines)
 
     def _send_feishu_message(self, content: str, *, timeout_seconds: Optional[float] = None) -> bool:
         """Send a single Feishu webhook message (interactive card, fallback text)."""
