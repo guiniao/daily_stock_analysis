@@ -35,8 +35,8 @@ permissions:
   contents: write
 
 env:
-  # 上游仓库 git URL（也可用 Secret SYNC_UPSTREAM_URL 覆盖，需改成真实值）
-  UPSTREAM_REPO_URL: https://github.com/原作者/daily_stock_analysis.git
+  # 上游仓库 git URL（也可用 Secret SYNC_UPSTREAM_URL 覆盖）
+  UPSTREAM_REPO_URL: https://github.com/ZhuLinsen/daily_stock_analysis.git
   UPSTREAM_BRANCH: main
   TARGET_BRANCH: custom
 
