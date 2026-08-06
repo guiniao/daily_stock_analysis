@@ -305,6 +305,9 @@ jobs:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
           FEISHU_WEBHOOK_KEYWORD: ${{ vars.FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
+          # Fork 扩展：折叠卡片开关（开启后每股一个可折叠面板，默认折叠）
+          FEISHU_COLLAPSIBLE_CARD: ${{ vars.FEISHU_COLLAPSIBLE_CARD || secrets.FEISHU_COLLAPSIBLE_CARD }}
+          FEISHU_COLLAPSIBLE_MAX_ITEMS: ${{ vars.FEISHU_COLLAPSIBLE_MAX_ITEMS || secrets.FEISHU_COLLAPSIBLE_MAX_ITEMS }}
           # 钉钉 Webhook
           DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
           DINGTALK_SECRET: ${{ secrets.DINGTALK_SECRET }}
