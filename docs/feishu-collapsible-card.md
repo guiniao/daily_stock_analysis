@@ -72,6 +72,20 @@
 
 未改动 `config.py`、`pipeline.py` 等大文件，开关走环境变量，便于上游合并。
 
-## 持续跟进上游更新
+## 上游更新策略（2026-08-09 起：独立模式）
 
-配套 `.github/workflows/sync-upstream.yml` 自动把上游 `main` 合并进本 Fork 的 `custom` 分支。折叠卡片改动集中在 `feishu_collapsible.py`（新文件，上游不会触碰）+ `feishu_sender.py`/`notification.py` 的小分支点，正常合并自动通过；仅当上游重构那两处入口时可能产生几行冲突，手动解决即可。
+本 Fork 已**独立运行，不再自动跟随上游**：
+
+- 已删除 `sync-upstream.yml`（原自动合并上游 main 到 custom 的工作流）。上游持续更新，
+  每次自动合并都可能产生冲突（`feishu_sender.py` / `notification.py` 等入口常被上游重构），
+  代价大于收益，故改为独立维护。
+- 需要更新上游时**手动同步**（本地 git）：
+  ```bash
+  git fetch upstream            # upstream 指向 https://github.com/ZhuLinsen/daily_stock_analysis.git
+  git checkout custom
+  git merge upstream/main       # 有冲突时手动解决后提交
+  git push origin custom
+  ```
+- 上游改过 `feishu_sender.py` / `notification.py` 时注意：上游会对报告做
+  `strip_hidden_markdown_metadata(...).strip()` 净化，需同步适配折叠卡片门控
+  （`_last_feishu_report` 比对），否则折叠卡片会被静默禁用。

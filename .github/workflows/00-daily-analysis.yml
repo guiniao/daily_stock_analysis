@@ -20,7 +20,9 @@ on:
       force_run:
         description: '强制运行（跳过交易日检查）'
         required: false
-        default: false
+        # Fork 独立模式：手动触发默认强制执行，避免非交易日被静默跳过、无任何推送。
+        # 定时触发不受影响（schedule 事件无 inputs），仍按交易日检查过滤。
+        default: true
         type: boolean
 
 # 并发控制：同一时间只运行一个分析任务
