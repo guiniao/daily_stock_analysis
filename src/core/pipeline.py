@@ -3074,14 +3074,32 @@ class StockAnalysisPipeline:
             analyze_kwargs = {"query_id": effective_query_id}
             if current_time is not None:
                 analyze_kwargs["current_time"] = current_time
-            result = self.analyze_stock(code, report_type, **analyze_kwargs)
-            
+
+            # Fork 扩展：整股分析失败（异常 → analyze_stock 返回 None，或 success=False）
+            # 时自动重试一次。覆盖取数/实时/筹码/新闻/基本面/板块/LLM/结果加工等所有
+            # 环节的瞬时失败（限流、网络抖动、数据源临时不可用等），避免单只股票被静默丢弃。
+            # 仍失败时打醒目标志 [STOCK_FAILED]，便于从日志定位具体原因。
+            result = None
+            for attempt in (1, 2):
+                result = self.analyze_stock(code, report_type, **analyze_kwargs)
+                if result and result.success:
+                    break
+                if attempt == 1:
+                    reason = (
+                        (result.error_message if result.error_message else "未返回错误信息")
+                        if result
+                        else "analyze_stock 返回 None（内部异常）"
+                    )
+                    logger.warning(f"[{code}] 第 1 次分析未成功，正在重试一次。原因: {reason}")
+                    # 短暂等待，给限流/网络恢复留出时间
+                    time.sleep(2)
+
             if result and result.success:
                 logger.info(
                     f"[{code}] 分析完成: {result.operation_advice}, "
                     f"评分 {result.sentiment_score}"
                 )
-                
+
                 # 单股推送模式（#55）：每分析完一只股票立即推送
                 if single_stock_notify:
                     self._send_single_stock_notification(
@@ -3091,9 +3109,13 @@ class StockAnalysisPipeline:
                     )
             elif result:
                 logger.warning(
-                    f"[{code}] 分析未成功: {result.error_message or '未知错误'}"
+                    f"[STOCK_FAILED] {code} 两次分析均未成功: {result.error_message or '未知错误'}"
                 )
-            
+            elif result is None:
+                logger.warning(
+                    f"[STOCK_FAILED] {code} 两次分析均异常退出（analyze_stock 返回 None）"
+                )
+
             return result
             
         except Exception as e:
