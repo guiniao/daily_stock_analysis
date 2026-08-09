@@ -719,46 +719,64 @@ class StockAnalysisPipeline:
                 )
 
             self._emit_progress(64, f"{stock_name}：正在请求 LLM 生成报告")
-            llm_started_at = time.monotonic()
-            try:
-                record_llm_run_started(
-                    model=getattr(self.config, "litellm_model", None),
-                    call_type="analysis",
+            # Fork 扩展：LLM 单次瞬时失败（异常或 success=False）时自动重试一次，
+            # 避免限流/网络抖动等瞬时错误把整只股票静默丢弃（对应"少推了 688549"这类问题）。
+            _llm_attempt = 0
+            _llm_last_exc: Optional[Exception] = None
+            while True:
+                _llm_attempt += 1
+                llm_started_at = time.monotonic()
+                try:
+                    record_llm_run_started(
+                        model=getattr(self.config, "litellm_model", None),
+                        call_type="analysis",
+                    )
+                    result = self.analyzer.analyze(
+                        enhanced_context,
+                        news_context=news_context,
+                        progress_callback=self._emit_progress,
+                        stream_progress_callback=_on_llm_stream,
+                        analysis_context_pack_summary=analysis_context_pack_summary,
+                    )
+                    llm_duration_ms = int((time.monotonic() - llm_started_at) * 1000)
+                    record_llm_run(
+                        success=bool(result and getattr(result, "success", True)),
+                        model=getattr(result, "model_used", None) if result else None,
+                        call_type="analysis",
+                        duration_ms=llm_duration_ms,
+                        error_type=(
+                            None
+                            if result and getattr(result, "success", True)
+                            else "AnalysisResultError"
+                        ),
+                        error_message=(
+                            getattr(result, "error_message", None)
+                            if result and not getattr(result, "success", True)
+                            else ("LLM returned empty result" if result is None else None)
+                        ),
+                    )
+                    _llm_last_exc = None
+                except Exception as exc:
+                    _llm_last_exc = exc
+                    record_llm_run(
+                        success=False,
+                        model=getattr(self.config, "litellm_model", None),
+                        call_type="analysis",
+                        duration_ms=int((time.monotonic() - llm_started_at) * 1000),
+                        error_type=type(exc).__name__,
+                        error_message=exc,
+                    )
+                if _llm_attempt >= 2:
+                    break
+                if _llm_last_exc is None and result and getattr(result, "success", True):
+                    break
+                logger.warning(
+                    f"{stock_name}({code}) LLM 分析未成功（第 {_llm_attempt} 次，"
+                    f"错误: {_llm_last_exc if _llm_last_exc is not None else (getattr(result, 'error_message', None) if result else 'LLM 返回空结果')}），"
+                    f"正在重试一次"
                 )
-                result = self.analyzer.analyze(
-                    enhanced_context,
-                    news_context=news_context,
-                    progress_callback=self._emit_progress,
-                    stream_progress_callback=_on_llm_stream,
-                    analysis_context_pack_summary=analysis_context_pack_summary,
-                )
-                llm_duration_ms = int((time.monotonic() - llm_started_at) * 1000)
-                record_llm_run(
-                    success=bool(result and getattr(result, "success", True)),
-                    model=getattr(result, "model_used", None) if result else None,
-                    call_type="analysis",
-                    duration_ms=llm_duration_ms,
-                    error_type=(
-                        None
-                        if result and getattr(result, "success", True)
-                        else "AnalysisResultError"
-                    ),
-                    error_message=(
-                        getattr(result, "error_message", None)
-                        if result and not getattr(result, "success", True)
-                        else ("LLM returned empty result" if result is None else None)
-                    ),
-                )
-            except Exception as exc:
-                record_llm_run(
-                    success=False,
-                    model=getattr(self.config, "litellm_model", None),
-                    call_type="analysis",
-                    duration_ms=int((time.monotonic() - llm_started_at) * 1000),
-                    error_type=type(exc).__name__,
-                    error_message=exc,
-                )
-                raise
+            if _llm_last_exc is not None:
+                raise _llm_last_exc
 
             # Step 7.5: 填充分析时的价格信息到 result
             if result:

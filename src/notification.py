@@ -416,13 +416,18 @@ class NotificationService(
         report_date: Optional[str] = None,
     ) -> str:
         """Generate the aggregate report content used by merge/save/push paths."""
-        # Fork 扩展：暂存最近一次报告的 results，供飞书折叠卡片发送器读取
+        # Fork 扩展：暂存最近一次报告的 results 与渲染文本，供飞书折叠卡片发送器读取
         # （仅当 FEISHU_COLLAPSIBLE_CARD 开启时使用）。详见 feishu_collapsible.py。
-        self._last_feishu_results = results
+        # 存渲染文本用于校验：折叠卡片只能拦截"这份聚合报告本身"的发送，
+        # 否则大盘复盘、飞书文档链接等其它飞书消息会被误拦截并重发股票卡片。
         normalized_type = self._normalize_report_type(report_type)
         if normalized_type == ReportType.BRIEF:
-            return self.generate_brief_report(results, report_date=report_date)
-        return self.generate_dashboard_report(results, report_date=report_date)
+            report = self.generate_brief_report(results, report_date=report_date)
+        else:
+            report = self.generate_dashboard_report(results, report_date=report_date)
+        self._last_feishu_results = results
+        self._last_feishu_report = report
+        return report
 
     def _collect_models_used(self, results: List[AnalysisResult]) -> List[str]:
         if not self._should_show_llm_model():

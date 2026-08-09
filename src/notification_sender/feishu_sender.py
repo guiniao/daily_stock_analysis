@@ -386,7 +386,11 @@ class FeishuSender:
             if (is_collapsible_enabled and callable(is_collapsible_enabled)
                     and is_collapsible_enabled()):
                 results = getattr(self, "_last_feishu_results", None)
-                if results:
+                # Fork 修复：只有本次发送的内容正是最近一次聚合报告本身时，才走折叠卡片。
+                # 否则大盘复盘、飞书文档链接等其它飞书消息会被折叠卡片误拦截，
+                # 导致同一份股票卡片被重复推送、且其它内容永远发不出去。
+                expected_report = getattr(self, "_last_feishu_report", None)
+                if results and expected_report is not None and content == expected_report:
                     return self._send_collapsible_cards(results, timeout_seconds=timeout_seconds)
         if self._feishu_url:
             return self._send_via_webhook(content, timeout_seconds=timeout_seconds)
