@@ -746,6 +746,9 @@ class Config:
 
     # Unified temperature for all LLM calls (LLM_TEMPERATURE); legacy per-provider temps are fallback only
     llm_temperature: float = 0.7
+    # 单次 LLM 调用超时（秒）:防止单只股票的某次 LLM 调用在慢日干挂数分钟拖死整轮。
+    # 超时后走失败重试 / 下一个模型,总时长可控。可通过 LLM_REQUEST_TIMEOUT_SECONDS 调整。
+    llm_request_timeout_seconds: int = 120
 
     # Provider prompt-cache controls. These do not control provider implicit cache.
     llm_prompt_cache_telemetry_enabled: bool = True
@@ -1644,6 +1647,12 @@ class Config:
             litellm_model=litellm_model,
             litellm_fallback_models=litellm_fallback_models,
             llm_temperature=resolve_unified_llm_temperature(litellm_model),
+            llm_request_timeout_seconds=parse_env_int(
+                os.getenv("LLM_REQUEST_TIMEOUT_SECONDS"),
+                120,
+                field_name="LLM_REQUEST_TIMEOUT_SECONDS",
+                minimum=10,
+            ),
             litellm_config_path=litellm_config_path,
             llm_models_source=llm_models_source,
             llm_channels=llm_channels,

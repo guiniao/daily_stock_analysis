@@ -3545,6 +3545,9 @@ class GeminiAnalyzer:
             generation_config = {
                 "temperature": config.llm_temperature,
                 "max_output_tokens": 8192,
+                # Fork 扩展：单次 LLM 调用超时上限（秒），防止慢日单次调用干挂数分钟拖死整轮。
+                # 超时即失败，走完整性重试 / 整股重试，总时长可控。可用 LLM_REQUEST_TIMEOUT_SECONDS 调整。
+                "timeout": config.llm_request_timeout_seconds,
             }
 
             logger.info(f"[LLM调用] 开始调用 {model_name}...")
