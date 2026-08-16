@@ -18,7 +18,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from enum import Enum
 
 import pandas as pd
@@ -96,7 +96,15 @@ class TrendAnalysisResult:
     ma20: float = 0.0
     ma60: float = 0.0
     current_price: float = 0.0
-    
+
+    # 周线/月线趋势（Fork 扩展：由日K重采样，跨周期确认）
+    weekly_ma5: Optional[float] = None
+    weekly_ma10: Optional[float] = None
+    monthly_ma3: Optional[float] = None
+    monthly_ma6: Optional[float] = None
+    weekly_trend: str = ""
+    monthly_trend: str = ""
+
     # 乖离率（与 MA5 的偏离度）
     bias_ma5: float = 0.0            # (Close - MA5) / MA5 * 100
     bias_ma10: float = 0.0
@@ -144,6 +152,12 @@ class TrendAnalysisResult:
             'ma20': self.ma20,
             'ma60': self.ma60,
             'current_price': self.current_price,
+            'weekly_ma5': self.weekly_ma5,
+            'weekly_ma10': self.weekly_ma10,
+            'monthly_ma3': self.monthly_ma3,
+            'monthly_ma6': self.monthly_ma6,
+            'weekly_trend': self.weekly_trend,
+            'monthly_trend': self.monthly_trend,
             'bias_ma5': self.bias_ma5,
             'bias_ma10': self.bias_ma10,
             'bias_ma20': self.bias_ma20,
@@ -257,6 +271,9 @@ class StockTrendAnalyzer:
         # 6. RSI 分析
         self._analyze_rsi(df, result)
 
+        # Fork: 周线/月线跨周期确认（由日K重采样）
+        self._analyze_weekly_monthly(df, result)
+
         # 7. 生成买入信号
         self._generate_signal(result)
 
@@ -273,6 +290,49 @@ class StockTrendAnalyzer:
         else:
             df['MA60'] = df['MA20']  # 数据不足时使用 MA20 替代
         return df
+
+    def _analyze_weekly_monthly(self, df: pd.DataFrame, result: TrendAnalysisResult) -> None:
+        """Fork 扩展：由日K重采样计算周线/月线均线方向（跨周期确认）。数据不足时留空。"""
+        try:
+            if df is None or df.empty:
+                return
+            work = df[["date", "close"]].copy()
+            work["date"] = pd.to_datetime(work["date"])
+            work = work.set_index("date").sort_index()
+            weekly = work["close"].resample("W-FRI").last().dropna()
+            monthly = work["close"].resample("ME").last().dropna()
+
+            if len(weekly) >= 5:
+                w5 = weekly.rolling(5).mean()
+                w10 = weekly.rolling(10).mean()
+                if not pd.isna(w5.iloc[-1]):
+                    result.weekly_ma5 = round(float(w5.iloc[-1]), 4)
+                if len(weekly) >= 10 and not pd.isna(w10.iloc[-1]):
+                    result.weekly_ma10 = round(float(w10.iloc[-1]), 4)
+                if result.weekly_ma5 and result.weekly_ma10:
+                    if result.weekly_ma5 > result.weekly_ma10:
+                        result.weekly_trend = "周线多头"
+                    elif result.weekly_ma5 < result.weekly_ma10:
+                        result.weekly_trend = "周线空头"
+                    else:
+                        result.weekly_trend = "周线走平"
+
+            if len(monthly) >= 3:
+                m3 = monthly.rolling(3).mean()
+                m6 = monthly.rolling(6).mean()
+                if not pd.isna(m3.iloc[-1]):
+                    result.monthly_ma3 = round(float(m3.iloc[-1]), 4)
+                if len(monthly) >= 6 and not pd.isna(m6.iloc[-1]):
+                    result.monthly_ma6 = round(float(m6.iloc[-1]), 4)
+                if result.monthly_ma3 and result.monthly_ma6:
+                    if result.monthly_ma3 > result.monthly_ma6:
+                        result.monthly_trend = "月线多头"
+                    elif result.monthly_ma3 < result.monthly_ma6:
+                        result.monthly_trend = "月线空头"
+                    else:
+                        result.monthly_trend = "月线走平"
+        except Exception as exc:
+            logger.debug("周线/月线计算跳过: %s", exc)
 
     def _calculate_macd(self, df: pd.DataFrame) -> pd.DataFrame:
         """

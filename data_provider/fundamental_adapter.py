@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -60,6 +62,31 @@ def _safe_float(value: Any) -> Optional[float]:
         return float(s)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_cn_amount(value: Any) -> Optional[float]:
+    """Parse Chinese-unit amounts like '-1.55亿' / '234.5万' to yuan."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    s = str(value).strip().replace(",", "").replace("元", "")
+    if not s or s in ("-", "--", "nan", "None"):
+        return None
+    sign = -1.0 if s.startswith("-") else 1.0
+    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*(亿|万)?", s.lstrip("+-"))
+    if not m:
+        return None
+    num = float(m.group(1))
+    unit = m.group(2) or ""
+    if unit == "亿":
+        num *= 1e8
+    elif unit == "万":
+        num *= 1e4
+    return sign * num
 
 
 def _safe_str(value: Any) -> str:
@@ -261,8 +288,82 @@ def _extract_latest_row(df: pd.DataFrame, stock_code: str) -> Optional[pd.Series
     return df.iloc[0]
 
 
+# Fork 扩展：同花顺全市场资金流排行表（运行级缓存 TTL）与东财熔断阈值。
+# 同花顺表一次拉全市场，21 只股票共享；每次运行新建 adapter → 缓存自动重建，保证数据新鲜。
+_THS_FLOW_TTL_SECONDS = 300.0
+_EASTMONEY_FLOW_FAIL_THRESHOLD = 1
+
+
 class AkshareFundamentalAdapter:
     """AkShare adapter for fundamentals, capital flow and dragon-tiger signals."""
+
+    def __init__(self) -> None:
+        # 运行级缓存：symbol("即时"/"5日排行"/"10日排行") -> (fetch_time, DataFrame)
+        self._ths_flow_cache: Dict[str, Tuple[float, Optional[pd.DataFrame]]] = {}
+        # 股东户数：report_period("20260630") -> (fetch_time, DataFrame)
+        self._gdhs_cache: Dict[str, Tuple[float, Optional[pd.DataFrame]]] = {}
+        self._ths_flow_lock = threading.Lock()
+        # 东财资金流连续失败计数：达到阈值后本轮直接走同花顺，避免每只股票都等东财超时
+        self._eastmoney_flow_failed = 0
+
+    def _fetch_ths_fund_flow(self, symbol: str) -> Optional[pd.DataFrame]:
+        """拉取同花顺全市场资金流排行表，运行级缓存共享；失败不缓存（下次重试）。"""
+        now = time.time()
+        with self._ths_flow_lock:
+            cached = self._ths_flow_cache.get(symbol)
+            if cached is not None and now - cached[0] < _THS_FLOW_TTL_SECONDS:
+                return cached[1]
+        try:
+            import akshare as ak
+
+            df = ak.stock_fund_flow_individual(symbol=symbol)
+            if isinstance(df, pd.Series):
+                df = df.to_frame().T
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                with self._ths_flow_lock:
+                    self._ths_flow_cache[symbol] = (now, df)
+                return df
+        except Exception as exc:
+            logger.warning("[资金流] 同花顺 %s 排行抓取失败: %s", symbol, exc)
+        return None
+
+    def _extract_ths_stock_flow(self, stock_code: str) -> Dict[str, Optional[float]]:
+        """从同花顺全市场排行表中按代码过滤出个股资金流。"""
+        target = _normalize_code(stock_code).zfill(6)
+        if len(target) != 6 or not target.isdigit():
+            return {}
+        flow: Dict[str, Optional[float]] = {
+            "main_net_inflow": None,
+            "inflow_5d": None,
+            "inflow_10d": None,
+        }
+        for symbol, field in (
+            ("即时", "main_net_inflow"),
+            ("5日排行", "inflow_5d"),
+            ("10日排行", "inflow_10d"),
+        ):
+            # 串行抓取：同花顺接口底层依赖非线程安全的原生库（mini_racer），并发会崩进程
+            df = self._fetch_ths_fund_flow(symbol)
+            if df is None or df.empty:
+                continue
+            code_col = next((c for c in df.columns if any(k in str(c) for k in ("代码", "股票代码"))), None)
+            if code_col is None:
+                continue
+            try:
+                matched = df[df[code_col].astype(str).str.zfill(6) == target]
+            except Exception:
+                continue
+            if matched.empty:
+                continue
+            net_col = next((c for c in matched.columns if any(k in str(c) for k in ("净额", "净流入"))), None)
+            if net_col is None:
+                continue
+            value = _parse_cn_amount(matched.iloc[0][net_col])
+            if value is not None:
+                flow[field] = value
+        if all(v is None for v in flow.values()):
+            return {}
+        return flow
 
     def _call_df_candidates(
         self,
@@ -425,28 +526,48 @@ class AkshareFundamentalAdapter:
             "errors": [],
         }
 
-        stock_df, stock_source, stock_errors = self._call_df_candidates([
-            ("stock_individual_fund_flow", {"stock": stock_code}),
-            ("stock_individual_fund_flow", {"symbol": stock_code}),
-            ("stock_individual_fund_flow", {}),
-            ("stock_main_fund_flow", {"symbol": stock_code}),
-            ("stock_main_fund_flow", {}),
-        ])
-        result["errors"].extend(stock_errors)
-        if stock_df is not None:
-            row = _extract_latest_row(stock_df, stock_code)
-            if row is not None:
-                net_inflow = _safe_float(_pick_by_keywords(row, ["主力净流入", "净流入", "净额"]))
-                inflow_5d = _safe_float(_pick_by_keywords(row, ["5日", "五日"]))
-                inflow_10d = _safe_float(_pick_by_keywords(row, ["10日", "十日"]))
-                result["stock_flow"] = {
-                    "main_net_inflow": net_inflow,
-                    "inflow_5d": inflow_5d,
-                    "inflow_10d": inflow_10d,
-                }
-                result["source_chain"].append(f"capital_stock:{stock_source}")
+        # Fork 扩展：东财资金流连续失败后本轮熔断，直接走同花顺，避免每只股票白等东财超时
+        eastmoney_circuit_open = self._eastmoney_flow_failed >= _EASTMONEY_FLOW_FAIL_THRESHOLD
 
-        sector_df, sector_source, sector_errors = self._call_df_candidates([
+        if not eastmoney_circuit_open:
+            stock_df, stock_source, stock_errors = self._call_df_candidates([
+                ("stock_individual_fund_flow", {"stock": stock_code}),
+                ("stock_individual_fund_flow", {"symbol": stock_code}),
+                ("stock_individual_fund_flow", {}),
+                ("stock_main_fund_flow", {"symbol": stock_code}),
+                ("stock_main_fund_flow", {}),
+            ])
+            result["errors"].extend(stock_errors)
+            if stock_df is not None:
+                row = _extract_latest_row(stock_df, stock_code)
+                if row is not None:
+                    net_inflow = _safe_float(_pick_by_keywords(row, ["主力净流入", "净流入", "净额"]))
+                    inflow_5d = _safe_float(_pick_by_keywords(row, ["5日", "五日"]))
+                    inflow_10d = _safe_float(_pick_by_keywords(row, ["10日", "十日"]))
+                    result["stock_flow"] = {
+                        "main_net_inflow": net_inflow,
+                        "inflow_5d": inflow_5d,
+                        "inflow_10d": inflow_10d,
+                    }
+                    result["source_chain"].append(f"capital_stock:{stock_source}")
+            if not result["stock_flow"]:
+                self._eastmoney_flow_failed += 1
+                if self._eastmoney_flow_failed >= _EASTMONEY_FLOW_FAIL_THRESHOLD:
+                    logger.info(
+                        "[资金流] 东财资金流连续失败 %s 次，本轮切换同花顺源",
+                        self._eastmoney_flow_failed,
+                    )
+
+        # Fork 扩展：东财不可用时用同花顺全市场排行表回退（运行级缓存，多股票共享）
+        if not result["stock_flow"]:
+            ths_flow = self._extract_ths_stock_flow(stock_code)
+            if ths_flow:
+                result["stock_flow"] = ths_flow
+                result["source_chain"].append("capital_stock:ths_stock_fund_flow_individual")
+
+        sector_df, sector_source, sector_errors = None, None, []
+        if not eastmoney_circuit_open:
+            sector_df, sector_source, sector_errors = self._call_df_candidates([
             ("stock_sector_fund_flow_rank", {}),
             ("stock_sector_fund_flow_summary", {}),
         ])
@@ -468,6 +589,90 @@ class AkshareFundamentalAdapter:
 
         has_content = bool(result["stock_flow"] or result["sector_rankings"]["top"] or result["sector_rankings"]["bottom"])
         result["status"] = "partial" if has_content else "not_supported"
+        return result
+
+    def _generate_gdhs_periods(self, n: int = 8) -> List[str]:
+        """最近 n 个不晚于今天的季度末报告期（如 20260630/20260331/...）。"""
+        now = datetime.now()
+        qends = [(3, 31), (6, 30), (9, 30), (12, 31)]
+        periods: List[str] = []
+        year, quarter = now.year, (now.month - 1) // 3
+        while len(periods) < max(1, n):
+            mm, dd = qends[quarter]
+            qend = datetime(year, mm, dd)
+            if qend <= now:
+                periods.append(qend.strftime("%Y%m%d"))
+            quarter -= 1
+            if quarter < 0:
+                quarter = 3
+                year -= 1
+        return periods
+
+    def _fetch_gdhs(self, period: str) -> Optional[pd.DataFrame]:
+        """拉取东财股东户数全市场表，运行级缓存共享；失败不缓存（下次重试）。"""
+        now = time.time()
+        with self._ths_flow_lock:
+            cached = self._gdhs_cache.get(period)
+            if cached is not None and now - cached[0] < _THS_FLOW_TTL_SECONDS:
+                return cached[1]
+        try:
+            import akshare as ak
+
+            df = ak.stock_zh_a_gdhs(symbol=period)
+            if isinstance(df, pd.Series):
+                df = df.to_frame().T
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                with self._ths_flow_lock:
+                    self._gdhs_cache[period] = (now, df)
+                return df
+        except Exception as exc:
+            logger.warning("[股东户数] 东财 %s 抓取失败: %s", period, exc)
+        return None
+
+    def get_shareholder_count(self, stock_code: str) -> Dict[str, Any]:
+        """返回最近报告期股东户数与较上期变化（筹码集中度代理）。"""
+        result: Dict[str, Any] = {
+            "status": "not_supported",
+            "data": {},
+            "source_chain": [],
+            "errors": [],
+        }
+        target = _normalize_code(stock_code).zfill(6)
+        if len(target) != 6 or not target.isdigit():
+            return result
+        for period in self._generate_gdhs_periods():
+            df = self._fetch_gdhs(period)
+            if df is None or df.empty:
+                continue
+            code_col = next((c for c in df.columns if any(k in str(c) for k in ("代码", "股票代码", "证券代码"))), None)
+            if code_col is None:
+                continue
+            try:
+                matched = df[df[code_col].astype(str).str.zfill(6) == target]
+            except Exception:
+                continue
+            if matched.empty:
+                continue
+            row = matched.iloc[0]
+            holder_count = _safe_float(_pick_by_keywords(row, ["股东户数-本次"]))
+            prev_count = _safe_float(_pick_by_keywords(row, ["股东户数-上次"]))
+            change = _safe_float(_pick_by_keywords(row, ["股东户数-变化"]))
+            change_pct = _safe_float(_pick_by_keywords(row, ["变化比例"]))
+            # 兜底：列名/值缺失时由本次-上次推导
+            if change is None and holder_count is not None and prev_count:
+                change = round(holder_count - prev_count, 2)
+            if change_pct is None and change is not None and prev_count:
+                change_pct = round(change / prev_count * 100.0, 2)
+            result["data"] = {
+                "report_date": period,
+                "holder_count": holder_count,
+                "prev_count": prev_count,
+                "change": change,
+                "change_pct": change_pct,
+            }
+            result["source_chain"].append(f"shareholder_count:gdhs:{period}")
+            result["status"] = "ok" if any(v is not None for v in result["data"].values()) else "partial"
+            return result
         return result
 
     def get_dragon_tiger_flag(self, stock_code: str, lookback_days: int = 20) -> Dict[str, Any]:

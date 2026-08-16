@@ -3167,6 +3167,7 @@ class DataFetcherManager:
             "institution": {},
             "capital_flow": {},
             "dragon_tiger": {},
+            "shareholder_count": {},
             "boards": {},
             "coverage": {},
             "source_chain": [],
@@ -3343,6 +3344,12 @@ class DataFetcherManager:
                 [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
                 ["etf not fully supported"],
             )
+            result_ctx["shareholder_count"] = self._build_fundamental_block(
+                "not_supported",
+                {},
+                [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
+                ["etf not fully supported"],
+            )
             result_ctx["boards"] = self._build_fundamental_block(
                 "not_supported",
                 {},
@@ -3367,6 +3374,14 @@ class DataFetcherManager:
             )
             _consume_budget(int((time.time() - dragon_tiger_start) * 1000))
 
+            shareholder_count_budget = min(fetch_timeout, remaining_seconds)
+            shareholder_count_start = time.time()
+            result_ctx["shareholder_count"] = self.get_shareholder_count_context(
+                stock_code,
+                budget_seconds=shareholder_count_budget,
+            )
+            _consume_budget(int((time.time() - shareholder_count_start) * 1000))
+
             result_ctx["boards"] = self.get_board_context(
                 stock_code,
                 budget_seconds=min(fetch_timeout, remaining_seconds),
@@ -3379,6 +3394,7 @@ class DataFetcherManager:
             "institution": result_ctx["institution"].get("status", "not_supported"),
             "capital_flow": result_ctx["capital_flow"].get("status", "not_supported"),
             "dragon_tiger": result_ctx["dragon_tiger"].get("status", "not_supported"),
+            "shareholder_count": result_ctx["shareholder_count"].get("status", "not_supported"),
             "boards": result_ctx["boards"].get("status", "not_supported"),
         }
         result_ctx["coverage"] = block_statuses
@@ -3389,6 +3405,7 @@ class DataFetcherManager:
             "institution",
             "capital_flow",
             "dragon_tiger",
+            "shareholder_count",
             "boards",
         ):
             result_ctx["errors"].extend(result_ctx[block].get("errors", []))
@@ -3524,6 +3541,52 @@ class DataFetcherManager:
             self._normalize_source_chain(
                 payload.get("source_chain", []),
                 "dragon_tiger",
+                str(payload.get("status", "ok")),
+                cost_ms,
+            ),
+            list(payload.get("errors", [])) + ([err] if err else []),
+        )
+
+    def get_shareholder_count_context(self, stock_code: str, budget_seconds: Optional[float] = None) -> Dict[str, Any]:
+        """股东户数块（筹码集中度代理，fail-open）。"""
+        from src.config import get_config
+
+        config = get_config()
+        stock_code = normalize_stock_code(stock_code)
+        timeout = float(budget_seconds if budget_seconds is not None else config.fundamental_fetch_timeout_seconds)
+        if _market_tag(stock_code) != "cn" or _is_etf_code(stock_code):
+            return self._build_fundamental_block(
+                "not_supported",
+                {},
+                [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
+                ["not supported"],
+            )
+
+        if timeout <= 0:
+            return self._build_fundamental_block(
+                "failed",
+                {},
+                [{"provider": "fundamental_pipeline", "result": "failed", "duration_ms": 0}],
+                ["fundamental stage timeout"],
+            )
+        payload, err, cost_ms = self._run_with_retry(
+            lambda: self._fundamental_adapter.get_shareholder_count(stock_code),
+            timeout,
+            "shareholder_count",
+        )
+        if not isinstance(payload, dict):
+            return self._build_fundamental_block(
+                "failed",
+                {},
+                [{"provider": "fundamental_pipeline", "result": "failed", "duration_ms": cost_ms}],
+                [err or "shareholder_count failed"],
+            )
+        return self._build_fundamental_block(
+            (payload.get("status") if isinstance(payload.get("status"), str) else "partial"),
+            dict(payload.get("data") or {}),
+            self._normalize_source_chain(
+                payload.get("source_chain", []),
+                "shareholder_count",
                 str(payload.get("status", "ok")),
                 cost_ms,
             ),

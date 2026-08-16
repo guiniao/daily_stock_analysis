@@ -1934,10 +1934,10 @@ class GeminiAnalyzer:
                 "resistance_level": 压力位价格
             },
             "volume_analysis": {
-                "volume_ratio": 量比数值,
+                "volume_ratio": 量比数值（必须填写，不要省略）,
                 "volume_status": "放量/缩量/平量",
-                "turnover_rate": 换手率百分比,
-                "volume_meaning": "量能含义解读（如：缩量回调表示抛压减轻）"
+                "turnover_rate": 换手率百分比（数据存在时必须填写，不要省略）,
+                "volume_meaning": "量能含义解读，必须给出量能位置判断：放量发生在高位还是低位、相对5日/10日均量的强弱（如：低位温和放量=资金进场，高位放量滞涨=出货风险）"
             },
             "chip_structure": {
                 "profit_ratio": 获利比例,
@@ -2122,10 +2122,10 @@ class GeminiAnalyzer:
                 "resistance_level": 压力位价格
             },
             "volume_analysis": {
-                "volume_ratio": 量比数值,
+                "volume_ratio": 量比数值（必须填写，不要省略）,
                 "volume_status": "放量/缩量/平量",
-                "turnover_rate": 换手率百分比,
-                "volume_meaning": "量能含义解读（如：缩量回调表示抛压减轻）"
+                "turnover_rate": 换手率百分比（数据存在时必须填写，不要省略）,
+                "volume_meaning": "量能含义解读，必须给出量能位置判断：放量发生在高位还是低位、相对5日/10日均量的强弱（如：低位温和放量=资金进场，高位放量滞涨=出货风险）"
             },
             "chip_structure": {
                 "profit_ratio": 获利比例,
@@ -3900,6 +3900,42 @@ class GeminiAnalyzer:
 > 资金流向只能作为价格位置的过滤器：接近压力且主力流出时不得追买；接近支撑且未放量跌破时，优先判断为持有观察、震荡或洗盘观察。
 """
 
+        # Fork 扩展：所属板块与板块强度（A 股）
+        belong_boards = fundamental_context.get("belong_boards") if isinstance(fundamental_context, dict) else None
+        if isinstance(belong_boards, list) and belong_boards:
+            belong_text = "、".join(
+                str(item) if isinstance(item, str) else str(item.get("name", item)) if isinstance(item, dict) else str(item)
+                for item in belong_boards[:8]
+            )
+            boards_block_ctx = (
+                fundamental_context.get("boards", {})
+                if isinstance(fundamental_context, dict)
+                else {}
+            )
+            boards_data_ctx = boards_block_ctx.get("data", {}) if isinstance(boards_block_ctx, dict) else {}
+            board_top = boards_data_ctx.get("top", [])[:3] if isinstance(boards_data_ctx, dict) else []
+            board_bottom = boards_data_ctx.get("bottom", [])[:3] if isinstance(boards_data_ctx, dict) else []
+
+            def _fmt_board(item: Any) -> str:
+                if isinstance(item, dict):
+                    name = str(item.get("name", "")).strip()
+                    flow = item.get("net_inflow")
+                    return f"{name}({flow})" if name and flow is not None else (name or "?")
+                return str(item)
+
+            board_top_text = "、".join(_fmt_board(b) for b in board_top) or "N/A"
+            board_bottom_text = "、".join(_fmt_board(b) for b in board_bottom) or "N/A"
+            prompt += f"""
+### 所属板块与板块强度
+| 项目 | 内容 |
+|------|------|
+| 所属板块/概念 | {belong_text} |
+| 板块资金流入靠前 | {board_top_text} |
+| 板块资金流出靠前 | {board_bottom_text} |
+
+> 结合所属板块的强弱判断赛道热度：所属板块整体资金流入且个股强势，偏利好；所属板块整体资金流出需警惕拖累。若板块数据缺失，明确说明。
+"""
+
         # 添加三大法人动向（台股筹码过滤器）— tw-only；仅当 institution 区块 status='ok'
         # 且有净额时注入，其他市场 status='not_supported' 会跳过，严格 additive。
         institution_block = (
@@ -3961,6 +3997,44 @@ class GeminiAnalyzer:
 > {chip_unavailable_text}
 > {chip_instruction}
 """
+            # Fork 扩展：筹码分布缺失时，用股东户数 + 换手率 + 龙虎榜做筹码代理判断
+            proxy_rows = []
+            sc_block = (
+                fundamental_context.get("shareholder_count", {})
+                if isinstance(fundamental_context, dict)
+                else {}
+            )
+            sc_data = sc_block.get("data", {}) if isinstance(sc_block, dict) else {}
+            if isinstance(sc_data, dict) and sc_data.get("holder_count") is not None:
+                proxy_rows.append(
+                    f"| 股东户数 | {sc_data.get('holder_count')} 户 | 报告期 {sc_data.get('report_date', 'N/A')}，"
+                    f"较上期 {sc_data.get('change', 'N/A')}（{sc_data.get('change_pct', 'N/A')}%） | "
+                    f"户数下降=筹码集中（主力吸筹），上升=筹码分散 |"
+                )
+            rt_proxy = context.get("realtime", {}) if isinstance(context, dict) else {}
+            if isinstance(rt_proxy, dict) and rt_proxy.get("turnover_rate") is not None:
+                proxy_rows.append(
+                    f"| 换手率 | {rt_proxy.get('turnover_rate')}% | | "
+                    f"高换手+放量=筹码松动，低换手=筹码锁定 |"
+                )
+            dt_block = (
+                fundamental_context.get("dragon_tiger", {})
+                if isinstance(fundamental_context, dict)
+                else {}
+            )
+            dt_data = dt_block.get("data", {}) if isinstance(dt_block, dict) else {}
+            if isinstance(dt_data, dict) and dt_data.get("is_on_list"):
+                proxy_rows.append(
+                    f"| 龙虎榜 | 近期上榜 {dt_data.get('recent_count', 0)} 次（{dt_data.get('latest_date', 'N/A')}） | "
+                    f"游资/机构席位异动参考 |"
+                )
+            if proxy_rows:
+                prompt += """
+### 筹码代理指标（筹码分布缺失时的替代判断）
+| 指标 | 数值 | 说明 | 含义 |
+|------|------|------|------|
+""" + "\n".join(proxy_rows) + """
+> 真实筹码分布缺失时，用以上代理指标判断筹码集中度：股东户数持续下降 + 低换手通常对应筹码集中（主力锁仓）；股东户数上升 + 高换手放量需警惕筹码分散派发。报告中应体现此替代判断，并注明“筹码分布数据缺失，以代理指标判断”，不要写死“无法判断筹码”。"""
         
         # 添加趋势分析结果（仅隐式内建 bull_trend 默认回退保留旧口径）
         if 'trend_analysis' in context:
@@ -3969,6 +4043,17 @@ class GeminiAnalyzer:
                 volume_change_ratio=context.get('volume_change_ratio'),
             )
             consistency_notes = trend.get('prompt_consistency_notes', [])
+            # Fork: 周线/月线跨周期确认（由日K重采样）
+            weekly_trend_text = trend.get('weekly_trend') or ''
+            monthly_trend_text = trend.get('monthly_trend') or ''
+            cross_period_text = "周/月线数据不足"
+            if weekly_trend_text or monthly_trend_text:
+                parts = []
+                if weekly_trend_text:
+                    parts.append(f"{weekly_trend_text}(WMA5 {trend.get('weekly_ma5', 'N/A')}/WMA10 {trend.get('weekly_ma10', 'N/A')})")
+                if monthly_trend_text:
+                    parts.append(f"{monthly_trend_text}(MMA3 {trend.get('monthly_ma3', 'N/A')}/MMA6 {trend.get('monthly_ma6', 'N/A')})")
+                cross_period_text = "；".join(parts)
             if use_legacy_default_prompt:
                 bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
                 prompt += f"""
@@ -3983,6 +4068,7 @@ class GeminiAnalyzer:
 | 量能状态 | {trend.get('volume_status', unknown_text)} | {trend.get('volume_trend', '')} |
 | 系统信号 | {trend.get('buy_signal', unknown_text)} | |
 | 系统评分 | {trend.get('signal_score', 0)}/100 | |
+| 周线/月线 | {cross_period_text} | 周MA5>周MA10为周线多头；月MA3>月MA6为月线多头，用于跨周期确认 |
 
 #### 系统分析理由
 **买入理由**：
@@ -4015,6 +4101,7 @@ class GeminiAnalyzer:
 | 量能状态 | {trend.get('volume_status', unknown_text)} | {trend.get('volume_trend', '')} |
 | 系统信号 | {trend.get('buy_signal', unknown_text)} | |
 | 系统评分 | {trend.get('signal_score', 0)}/100 | |
+| 周线/月线 | {cross_period_text} | 周MA5>周MA10为周线多头；月MA3>月MA6为月线多头，用于跨周期确认 |
 
 #### 系统分析理由
 **支持因素**：

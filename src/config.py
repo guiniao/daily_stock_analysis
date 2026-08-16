@@ -157,7 +157,7 @@ def parse_prompt_cache_diagnostics_level(value: Optional[str]) -> str:
 
 
 AGENT_MAX_STEPS_DEFAULT = 10
-FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT = 8.0
+FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT = 100.0
 NEWS_STRATEGY_WINDOWS: Dict[str, int] = {
     "ultra_short": 1,
     "short": 3,
@@ -826,8 +826,8 @@ class Config:
     social_sentiment_api_url: str = "https://api.adanos.org"
 
     # === 新闻与分析筛选配置 ===
-    news_max_age_days: int = 3   # 新闻最大时效（天）
-    news_strategy_profile: str = "short"  # 新闻窗口策略档位：ultra_short/short/medium/long
+    news_max_age_days: int = 7   # 新闻最大时效（天）
+    news_strategy_profile: str = "medium"  # 新闻窗口策略档位：ultra_short/short/medium/long
     news_intel_retention_days: int = 30  # 本地资讯池保留天数
     news_intel_fetch_timeout_sec: float = 8.0  # 单个资讯源拉取超时
     news_intel_max_items_per_source: int = 50  # 单次每个资讯源最多采集条数
@@ -1044,6 +1044,8 @@ class Config:
     enable_chip_distribution: bool = True
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
+    # 技术分析历史窗口（天）：覆盖周线/月线重采样所需的日K长度
+    technical_history_days: int = 260
     # 实时行情数据源优先级（逗号分隔）
     # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
     # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
@@ -1715,9 +1717,9 @@ class Config:
             searxng_public_instances_enabled=searxng_public_instances_enabled,
             social_sentiment_api_key=os.getenv('SOCIAL_SENTIMENT_API_KEY') or None,
             social_sentiment_api_url=os.getenv('SOCIAL_SENTIMENT_API_URL', 'https://api.adanos.org').rstrip('/'),
-            news_max_age_days=parse_env_int(os.getenv('NEWS_MAX_AGE_DAYS'), 3, field_name='NEWS_MAX_AGE_DAYS', minimum=1),
+            news_max_age_days=parse_env_int(os.getenv('NEWS_MAX_AGE_DAYS'), 7, field_name='NEWS_MAX_AGE_DAYS', minimum=1),
             news_strategy_profile=cls._parse_news_strategy_profile(
-                os.getenv('NEWS_STRATEGY_PROFILE', 'short')
+                os.getenv('NEWS_STRATEGY_PROFILE', 'medium')
             ),
             news_intel_retention_days=parse_env_int(
                 os.getenv('NEWS_INTEL_RETENTION_DAYS'),
@@ -2034,6 +2036,13 @@ class Config:
             enable_chip_distribution=os.getenv('ENABLE_CHIP_DISTRIBUTION', 'true').lower() == 'true',
             # 东财接口补丁开关
             enable_eastmoney_patch=os.getenv('ENABLE_EASTMONEY_PATCH', 'false').lower() == 'true',
+            # 技术分析历史窗口（天）：覆盖周线/月线重采样所需日K长度
+            technical_history_days=parse_env_int(
+                os.getenv('TECHNICAL_HISTORY_DAYS'),
+                260,
+                field_name='TECHNICAL_HISTORY_DAYS',
+                minimum=60,
+            ),
             # 实时行情数据源优先级：
             # - tencent: 腾讯财经，有量比/换手率/PE/PB等，单股查询稳定（推荐）
             # - akshare_sina: 新浪财经，基本行情稳定，但无量比
@@ -2051,7 +2060,7 @@ class Config:
             ),
             fundamental_fetch_timeout_seconds=parse_env_float(
                 os.getenv('FUNDAMENTAL_FETCH_TIMEOUT_SECONDS'),
-                8.0,
+                80.0,
                 field_name='FUNDAMENTAL_FETCH_TIMEOUT_SECONDS',
                 minimum=0.0,
             ),

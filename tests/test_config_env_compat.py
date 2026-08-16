@@ -272,8 +272,8 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         ):
             config = Config._load_from_env()
 
-        self.assertEqual(config.fundamental_stage_timeout_seconds, 8.0)
-        self.assertEqual(config.fundamental_fetch_timeout_seconds, 8.0)
+        self.assertEqual(config.fundamental_stage_timeout_seconds, 100.0)
+        self.assertEqual(config.fundamental_fetch_timeout_seconds, 80.0)
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
@@ -929,7 +929,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             config = Config._load_from_env()
 
         self.assertEqual(config.agent_orchestrator_timeout_s, 600)
-        self.assertEqual(config.news_max_age_days, 3)
+        self.assertEqual(config.news_max_age_days, 7)
         self.assertEqual(config.max_workers, 3)
         self.assertEqual(config.webui_port, 8000)
 
