@@ -253,6 +253,57 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("近1日的新闻搜索结果", prompt)
         self.assertIn("超出近1日窗口的新闻一律忽略", prompt)
 
+    def test_prompt_includes_weekly_monthly_cross_period_trend(self) -> None:
+        """周线/月线跨周期字段透传后，提示词必须出现周线/月线行。"""
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        context = {
+            "code": "002049",
+            "stock_name": "紫光国微",
+            "date": "2026-08-14",
+            "today": {"close": 34.75, "ma5": 34.976, "ma10": 34.21, "ma20": 32.746},
+            "trend_analysis": {
+                "weekly_trend": "周线空头",
+                "monthly_trend": "月线多头",
+                "weekly_ma5": 35.0,
+                "weekly_ma10": 36.1,
+                "monthly_ma3": 34.5,
+                "monthly_ma6": 33.9,
+            },
+        }
+
+        prompt = analyzer._format_prompt(context, "紫光国微", news_context=None)
+
+        self.assertIn("周线/月线", prompt)
+        self.assertIn("周线空头", prompt)
+        self.assertIn("月线多头", prompt)
+        self.assertIn("WMA5", prompt)
+        self.assertIn("MMA3", prompt)
+
+    def test_prompt_includes_turnover_rate_in_realtime_section(self) -> None:
+        """实时行情存在换手率时，提示词必须给出换手率数值。"""
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        context = {
+            "code": "002049",
+            "stock_name": "紫光国微",
+            "date": "2026-08-14",
+            "today": {"close": 34.75},
+            "realtime": {
+                "price": 34.75,
+                "volume_ratio": 0.67,
+                "turnover_rate": 3.24,
+                "pe_ratio": 258,
+            },
+        }
+
+        prompt = analyzer._format_prompt(context, "紫光国微", news_context=None)
+
+        self.assertIn("换手率", prompt)
+        self.assertIn("3.24", prompt)
+
     def test_format_prompt_injects_market_phase_and_pack_summary_before_technical_data(self) -> None:
         with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
             analyzer = GeminiAnalyzer()

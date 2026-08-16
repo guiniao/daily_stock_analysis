@@ -422,6 +422,33 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
         self.assertEqual(enhanced["today"]["close"], 15.0)
         self.assertEqual(enhanced["today"]["ma5"], 14.8)
 
+    def test_enhance_context_passes_weekly_monthly_trend_fields(self) -> None:
+        """周线/月线跨周期字段必须透传到 trend_analysis，否则提示词永远拿到空。"""
+        context = {"code": "600519", "today": {"close": 15.0}}
+        trend = TrendAnalysisResult(
+            code="600519",
+            trend_status=TrendStatus.BULL,
+            ma5=15.2,
+            ma10=14.9,
+            ma20=14.6,
+            weekly_ma5=15.5,
+            weekly_ma10=16.1,
+            monthly_ma3=16.0,
+            monthly_ma6=16.4,
+            weekly_trend="周线空头",
+            monthly_trend="月线多头",
+        )
+        enhanced = self.pipeline._enhance_context(
+            context, None, None, trend, "贵州茅台"
+        )
+        ta = enhanced["trend_analysis"]
+        self.assertEqual(ta["weekly_trend"], "周线空头")
+        self.assertEqual(ta["monthly_trend"], "月线多头")
+        self.assertEqual(ta["weekly_ma5"], 15.5)
+        self.assertEqual(ta["weekly_ma10"], 16.1)
+        self.assertEqual(ta["monthly_ma3"], 16.0)
+        self.assertEqual(ta["monthly_ma6"], 16.4)
+
 
 if __name__ == "__main__":
     unittest.main()

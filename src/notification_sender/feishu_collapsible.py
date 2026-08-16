@@ -166,12 +166,18 @@ def _render_stock_detail_lines(notifier: Any, result: Any, labels: Dict[str, str
                 f"{labels.get('ma20_label', 'MA20')}: {price_data.get('ma20', 'N/A')}"
             )
         if vol_data:
-            lines.append(
-                f"📊 {labels.get('volume_label', '量能')}: "
-                f"{labels.get('volume_ratio_label', '量比')} "
-                f"{vol_data.get('volume_ratio', 'N/A')} "
-                f"({vol_data.get('volume_status', '')})"
-            )
+            vol_parts = [
+                f"{labels.get('volume_ratio_label', '量比')} {vol_data.get('volume_ratio', 'N/A')}"
+            ]
+            turnover_rate = vol_data.get("turnover_rate")
+            if turnover_rate not in (None, "", "N/A"):
+                vol_parts.append(
+                    f"{labels.get('turnover_rate_label', '换手率')} {turnover_rate}%"
+                )
+            volume_status = vol_data.get("volume_status")
+            if volume_status:
+                vol_parts.append(f"({volume_status})")
+            lines.append(f"📊 {labels.get('volume_label', '量能')}: " + " ".join(vol_parts))
         if chip_data:
             if is_chip_structure_unavailable(chip_data):
                 lines.append(

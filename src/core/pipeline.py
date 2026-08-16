@@ -983,6 +983,13 @@ class StockAnalysisPipeline:
                 'signal_score': trend_result.signal_score,
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
+                # Fork 扩展：周线/月线跨周期字段必须透传，否则提示词永远拿到空
+                'weekly_ma5': trend_result.weekly_ma5,
+                'weekly_ma10': trend_result.weekly_ma10,
+                'monthly_ma3': trend_result.monthly_ma3,
+                'monthly_ma6': trend_result.monthly_ma6,
+                'weekly_trend': trend_result.weekly_trend,
+                'monthly_trend': trend_result.monthly_trend,
             }
 
         # Issue #234：盘中分析使用实时 OHLC 与趋势 MA 覆盖 today。
