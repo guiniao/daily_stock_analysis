@@ -264,6 +264,31 @@ def _build_dividend_payload(
     }
 
 
+def _transpose_wide_financial(df: pd.DataFrame) -> pd.DataFrame:
+    """stock_financial_abstract 返回宽表（指标行 x 报告期列），转置为长表（报告期行 x 指标列）。
+
+    宽表特征：存在名为「指标」的列、无股票代码列。转置后指标名变列名，最新报告期排在首行，
+    与原提取逻辑（按列名关键词取数 + 取首行）兼容。
+    """
+    if df is None or df.empty:
+        return df
+    indicator_cols = [c for c in df.columns if "指标" in str(c)]
+    if not indicator_cols:
+        return df
+    indicator_col = indicator_cols[0]
+    value_cols = [
+        c for c in df.columns if c != indicator_col and str(c).strip() not in ("选项", "")
+    ]
+    if len(value_cols) < 2:
+        return df
+    out = df[value_cols].T.copy()
+    out.columns = df[indicator_col].astype(str).str.strip().tolist()
+    # 同一指标在常用指标/成长能力等板块会重复出现，保留首个（各板块最新报告期数据一致）
+    out = out.loc[:, ~out.columns.duplicated()]
+    out.insert(0, "报告期", out.index.astype(str))
+    return out
+
+
 def _extract_latest_row(df: pd.DataFrame, stock_code: str) -> Optional[pd.Series]:
     """
     Select the most relevant row for the given stock.
@@ -411,10 +436,17 @@ class AkshareFundamentalAdapter:
         ])
         result["errors"].extend(fin_errors)
         if fin_df is not None:
+            fin_df = _transpose_wide_financial(fin_df)
             row = _extract_latest_row(fin_df, stock_code)
             if row is not None:
-                revenue_yoy = _safe_float(_pick_by_keywords(row, ["营业收入同比", "营收同比", "收入同比", "同比增长"]))
-                profit_yoy = _safe_float(_pick_by_keywords(row, ["净利润同比", "净利同比", "归母净利润同比"]))
+                revenue_yoy = _safe_float(
+                    _pick_by_keywords(row, ["营业收入同比", "营收同比", "收入同比", "同比增长",
+                                            "营业总收入增长率", "总营收增长率", "营收增长率", "收入增长率"])
+                )
+                profit_yoy = _safe_float(
+                    _pick_by_keywords(row, ["净利润同比", "净利同比", "归母净利润同比",
+                                            "归属母公司净利润增长率", "归母净利润增长率", "净利润增长率", "净利增长率"])
+                )
                 roe = _safe_float(_pick_by_keywords(row, ["净资产收益率", "ROE", "净资产收益"]))
                 gross_margin = _safe_float(_pick_by_keywords(row, ["毛利率"]))
                 report_date = _normalize_report_date(_pick_by_keywords(row, _DIVIDEND_KEYWORD_MAP["report_date"]))

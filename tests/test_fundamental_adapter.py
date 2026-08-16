@@ -18,6 +18,7 @@ from data_provider.fundamental_adapter import (
     _build_dividend_payload,
     _extract_latest_row,
     _parse_dividend_plan_to_per_share,
+    _transpose_wide_financial,
 )
 
 
@@ -72,6 +73,65 @@ class TestFundamentalAdapter(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertTrue(result["is_on_list"])
         self.assertGreaterEqual(result["recent_count"], 1)
+
+    def test_transpose_wide_financial_converts_indicator_rows_to_columns(self) -> None:
+        wide = pd.DataFrame(
+            {
+                "选项": ["常用指标", "常用指标", "成长能力"],
+                "指标": ["营业总收入", "净资产收益率(ROE)", "营业总收入增长率"],
+                "20260630": [3.44e9, 5.65, 13.0],
+                "20251231": [6.14e9, 10.1, 20.0],
+            }
+        )
+        out = _transpose_wide_financial(wide)
+        self.assertEqual(list(out.columns)[0], "报告期")
+        self.assertIn("营业总收入", out.columns)
+        self.assertIn("净资产收益率(ROE)", out.columns)
+        # 转置后首行为最新报告期
+        self.assertEqual(str(out.iloc[0]["营业总收入"]), "3440000000.0")
+        self.assertEqual(str(out.iloc[0]["净资产收益率(ROE)"]), "5.65")
+
+    def test_fundamental_bundle_extracts_financial_from_wide_abstract(self) -> None:
+        # stock_financial_abstract 宽表：指标行 x 报告期列，必须转置后才能提取
+        wide = pd.DataFrame(
+            {
+                "选项": ["常用指标", "常用指标", "常用指标", "常用指标", "成长能力", "成长能力"],
+                "指标": [
+                    "归母净利润",
+                    "营业总收入",
+                    "净资产收益率(ROE)",
+                    "毛利率",
+                    "营业总收入增长率",
+                    "归属母公司净利润增长率",
+                ],
+                "20260630": [7.977066e8, 3.443429e9, 5.65, 53.59, 13.000477, 15.286569],
+                "20251231": [1.437125e9, 6.145823e9, 10.1, 55.0, 20.0, 18.0],
+            }
+        )
+        adapter = AkshareFundamentalAdapter()
+        with patch.object(
+            adapter,
+            "_call_df_candidates",
+            side_effect=[
+                (wide, "stock_financial_abstract", []),
+                (None, None, []),
+                (None, None, []),
+                (None, None, []),
+                (None, None, []),
+                (None, None, []),
+            ],
+        ):
+            result = adapter.get_fundamental_bundle("002049")
+
+        growth = result["growth"]
+        self.assertEqual(growth["revenue_yoy"], 13.000477)
+        self.assertEqual(growth["net_profit_yoy"], 15.286569)
+        self.assertEqual(growth["roe"], 5.65)
+        self.assertEqual(growth["gross_margin"], 53.59)
+        report = result["earnings"]["financial_report"]
+        self.assertEqual(report["revenue"], 3.443429e9)
+        self.assertEqual(report["net_profit_parent"], 7.977066e8)
+        self.assertEqual(report["report_date"], "2026-06-30")
 
     def test_fundamental_bundle_includes_financial_report_and_dividend_payload(self) -> None:
         adapter = AkshareFundamentalAdapter()
