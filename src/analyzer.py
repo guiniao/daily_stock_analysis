@@ -992,6 +992,47 @@ def fill_price_position_if_needed(
         logger.warning("[price_position] Fill failed, skipping: %s", e)
 
 
+def fill_trend_status_with_weekly_monthly(
+    result: "AnalysisResult",
+    trend_result: Any = None,
+) -> None:
+    """将技术分析算出的周线/月线跨周期字段回填进 dashboard.trend_status（确定性，不依赖 LLM）。"""
+    if not result:
+        return
+    try:
+        if not result.dashboard:
+            result.dashboard = {}
+        dash = result.dashboard
+        dp = dash.get("data_perspective") or {}
+        dash["data_perspective"] = dp
+        ts = dp.get("trend_status") or {}
+
+        if not trend_result:
+            return
+        tr = trend_result if isinstance(trend_result, dict) else (
+            trend_result.__dict__ if hasattr(trend_result, "__dict__") else {}
+        )
+
+        computed = {
+            "weekly_trend": tr.get("weekly_trend") or "",
+            "monthly_trend": tr.get("monthly_trend") or "",
+            "weekly_ma5": tr.get("weekly_ma5"),
+            "weekly_ma10": tr.get("weekly_ma10"),
+            "monthly_ma3": tr.get("monthly_ma3"),
+            "monthly_ma6": tr.get("monthly_ma6"),
+        }
+        filled = False
+        for k, v in computed.items():
+            if _is_value_placeholder(ts.get(k)) and not _is_value_placeholder(v):
+                ts[k] = v
+                filled = True
+        if filled:
+            dp["trend_status"] = ts
+            logger.info("[trend_status] Filled weekly/monthly cross-period fields from computed data")
+    except Exception as e:
+        logger.warning("[trend_status] Fill weekly/monthly failed, skipping: %s", e)
+
+
 def stabilize_decision_with_structure(
     result: "AnalysisResult",
     trend_result: Any = None,
@@ -1921,7 +1962,9 @@ class GeminiAnalyzer:
             "trend_status": {
                 "ma_alignment": "均线排列状态描述",
                 "is_bullish": true/false,
-                "trend_score": 0-100
+                "trend_score": 0-100,
+                "weekly_trend": "周线多头/周线空头/周线走平（数据存在时必须给出）",
+                "monthly_trend": "月线多头/月线空头/月线走平（数据存在时必须给出）"
             },
             "price_position": {
                 "current_price": 当前价格数值,
@@ -2109,7 +2152,9 @@ class GeminiAnalyzer:
             "trend_status": {
                 "ma_alignment": "均线排列状态描述",
                 "is_bullish": true/false,
-                "trend_score": 0-100
+                "trend_score": 0-100,
+                "weekly_trend": "周线多头/周线空头/周线走平（数据存在时必须给出）",
+                "monthly_trend": "月线多头/月线空头/月线走平（数据存在时必须给出）"
             },
             "price_position": {
                 "current_price": 当前价格数值,

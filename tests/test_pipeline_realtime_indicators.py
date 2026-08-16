@@ -19,6 +19,7 @@ import pandas as pd
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from data_provider.realtime_types import UnifiedRealtimeQuote, RealtimeSource
+from src.analyzer import AnalysisResult, fill_trend_status_with_weekly_monthly
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult, TrendStatus
 from src.core.pipeline import StockAnalysisPipeline
 
@@ -448,6 +449,36 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
         self.assertEqual(ta["weekly_ma10"], 16.1)
         self.assertEqual(ta["monthly_ma3"], 16.0)
         self.assertEqual(ta["monthly_ma6"], 16.4)
+
+    def test_fill_trend_status_with_weekly_monthly_backfills_dashboard(self) -> None:
+        """技术分析算出的周线/月线必须回填进 dashboard.trend_status，卡片才能显示。"""
+        result = AnalysisResult(
+            code="002049",
+            name="紫光国微",
+            sentiment_score=60,
+            trend_prediction="看多",
+            operation_advice="持有",
+            dashboard={
+                "data_perspective": {
+                    "trend_status": {"ma_alignment": "MA5>MA10>MA20", "trend_score": 90}
+                }
+            },
+        )
+        trend = TrendAnalysisResult(
+            code="002049",
+            weekly_ma5=15.5,
+            weekly_ma10=16.1,
+            monthly_ma3=16.0,
+            monthly_ma6=16.4,
+            weekly_trend="周线空头",
+            monthly_trend="月线多头",
+        )
+        fill_trend_status_with_weekly_monthly(result, trend)
+        ts = result.dashboard["data_perspective"]["trend_status"]
+        self.assertEqual(ts["weekly_trend"], "周线空头")
+        self.assertEqual(ts["monthly_trend"], "月线多头")
+        self.assertEqual(ts["weekly_ma5"], 15.5)
+        self.assertEqual(ts["monthly_ma6"], 16.4)
 
 
 if __name__ == "__main__":

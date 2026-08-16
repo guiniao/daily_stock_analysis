@@ -152,12 +152,23 @@ def _render_stock_detail_lines(notifier: Any, result: Any, labels: Dict[str, str
         chip_data = data_persp.get("chip_structure", {}) or {}
 
         if trend_data:
-            lines.append(
-                f"📈 {labels.get('ma_alignment_label', '均线排列')}: "
-                f"{trend_data.get('ma_alignment', 'N/A')} | "
-                f"{labels.get('trend_strength_label', '趋势强度')}: "
-                f"{trend_data.get('trend_score', 'N/A')}/100"
-            )
+            trend_parts = [
+                f"{labels.get('ma_alignment_label', '均线排列')}: {trend_data.get('ma_alignment', 'N/A')}",
+                f"{labels.get('trend_strength_label', '趋势强度')}: {trend_data.get('trend_score', 'N/A')}/100",
+            ]
+            weekly_trend = trend_data.get("weekly_trend")
+            if weekly_trend:
+                trend_parts.append(
+                    f"周线 {weekly_trend}"
+                    f"{'(' + str(trend_data.get('weekly_ma5', '')) + '/' + str(trend_data.get('weekly_ma10', '')) + ')' if trend_data.get('weekly_ma5') is not None and trend_data.get('weekly_ma10') is not None else ''}"
+                )
+            monthly_trend = trend_data.get("monthly_trend")
+            if monthly_trend:
+                trend_parts.append(
+                    f"月线 {monthly_trend}"
+                    f"{'(' + str(trend_data.get('monthly_ma3', '')) + '/' + str(trend_data.get('monthly_ma6', '')) + ')' if trend_data.get('monthly_ma3') is not None and trend_data.get('monthly_ma6') is not None else ''}"
+                )
+            lines.append("📈 " + " | ".join(trend_parts))
         if price_data:
             lines.append(
                 f"💲 {labels.get('current_price_label', '现价')}: "

@@ -32,6 +32,7 @@ from src.analyzer import (
     GeminiAnalyzer,
     AnalysisResult,
     fill_price_position_if_needed,
+    fill_trend_status_with_weekly_monthly,
     normalize_chip_structure_availability,
     populate_decision_action_fields,
     stabilize_decision_with_structure,
@@ -792,9 +793,10 @@ class StockAnalysisPipeline:
             if result:
                 normalize_chip_structure_availability(result, chip_data)
 
-            # Step 7.7: price_position fallback
+            # Step 7.7: price_position fallback + 周线/月线跨周期字段回填
             if result:
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
+                fill_trend_status_with_weekly_monthly(result, trend_result)
                 action_source_advice = getattr(result, "operation_advice", None)
                 stabilize_decision_with_structure(result, trend_result, fundamental_context)
                 adjustments = apply_phase_decision_guardrails(
@@ -1518,6 +1520,7 @@ class StockAnalysisPipeline:
                 )
                 action_chain_valid = pipeline_start_action is not None
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
+                fill_trend_status_with_weekly_monthly(result, trend_result)
                 realtime_data = initial_context.get("realtime_quote", {})
                 if isinstance(realtime_data, dict):
                     result.current_price = realtime_data.get("price")
