@@ -26,9 +26,10 @@ def _fetch_trend_data(stock_code: str):
     from src.config import get_config
     from src.services.history_loader import load_history_df
 
-    # 60 天不足以计算月线 MA3/MA6，与主 pipeline 的 technical_history_days 保持一致
+    # 260 天窗口，且要求缓存至少覆盖约6个月（月线 MA6 需要），否则自动走网络补拉
     history_days = getattr(get_config(), "technical_history_days", 260)
-    df, _ = load_history_df(stock_code, days=history_days)
+    min_records = int(history_days * 0.5)
+    df, _ = load_history_df(stock_code, days=history_days, min_records=min_records)
     return df
 
 

@@ -57,6 +57,52 @@ class HistoryLoaderTestCase(unittest.TestCase):
         mock_db.get_data_range.assert_called_once()
 
     # ------------------------------------------------------------------
+    # Short cache must not satisfy a long request
+    # ------------------------------------------------------------------
+    @patch("src.services.history_loader._get_fetcher_manager")
+    @patch("src.storage.get_db")
+    def test_min_records_short_cache_falls_back(self, mock_get_db, mock_get_fm):
+        """min_records 指定后，短缓存（~83条）不满足 260 天请求须走网络补拉（月线 MA6 需要约6个月数据）。"""
+        from src.services.history_loader import load_history_df
+
+        fake_bar = MagicMock()
+        fake_bar.to_dict.return_value = {"date": "2026-04-18", "close": 10}
+        mock_db = MagicMock()
+        mock_db.get_data_range.return_value = [fake_bar] * 83
+        mock_get_db.return_value = mock_db
+
+        fake_df = pd.DataFrame({"close": [1, 2, 3]})
+        mock_fm = MagicMock()
+        mock_fm.get_daily_data.return_value = (fake_df, "tushare")
+        mock_get_fm.return_value = mock_fm
+
+        df, source = load_history_df(
+            "300274", days=260, target_date=date(2026, 4, 18), min_records=130
+        )
+
+        self.assertEqual(source, "tushare")
+        mock_fm.get_daily_data.assert_called_once_with("300274", days=260)
+
+    @patch("src.services.history_loader._get_fetcher_manager")
+    @patch("src.storage.get_db")
+    def test_min_records_long_enough_cache_stays_db_hit(self, mock_get_db, mock_get_fm):
+        """min_records 满足时仍走 DB 缓存。"""
+        from src.services.history_loader import load_history_df
+
+        fake_bar = MagicMock()
+        fake_bar.to_dict.return_value = {"date": "2026-04-18", "close": 10}
+        mock_db = MagicMock()
+        mock_db.get_data_range.return_value = [fake_bar] * 200
+        mock_get_db.return_value = mock_db
+
+        df, source = load_history_df(
+            "600519", days=260, target_date=date(2026, 4, 18), min_records=130
+        )
+
+        self.assertEqual(source, "db_cache")
+        self.assertEqual(len(df), 200)
+
+    # ------------------------------------------------------------------
     # DB miss → DFM fallback
     # ------------------------------------------------------------------
     @patch("src.services.history_loader._get_fetcher_manager")

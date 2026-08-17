@@ -127,12 +127,16 @@ def load_history_df(
     stock_code: str,
     days: int = 60,
     target_date: Optional[date] = None,
+    min_records: Optional[int] = None,
 ) -> Tuple[Optional[pd.DataFrame], str]:
     """Load K-line history, DB first with DataFetcherManager fallback.
 
     Returns ``(df, source)`` where *source* is ``"db_cache"`` on DB hit or the
     actual provider name on network fallback.  Returns ``(None, "none")`` when
     both paths fail.
+
+    ``min_records`` 指定 DB 缓存至少需满足的记录数；短缓存不满足时走网络补拉。
+    默认按请求窗口估算，用于需要长历史（如月线 MA3/MA6）的调用方。
     """
     from src.storage import get_db
 
@@ -150,7 +154,7 @@ def load_history_df(
     try:
         db = get_db()
         _code, bars = _select_best_bars(db, stock_code, start, end)
-        required_records = max(min(days, _CACHE_MIN_RECORDS), 1)
+        required_records = min_records if min_records is not None else max(min(days, _CACHE_MIN_RECORDS), 1)
         latest_date = max((_bar_date(bar) for bar in bars), default=date.min)
         if bars and latest_date >= end and len(bars) >= required_records:
             df = pd.DataFrame([b.to_dict() for b in bars])
