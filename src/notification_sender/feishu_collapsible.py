@@ -170,12 +170,18 @@ def _render_stock_detail_lines(notifier: Any, result: Any, labels: Dict[str, str
                 )
             lines.append("📈 " + " | ".join(trend_parts))
         if price_data:
-            lines.append(
-                f"💲 {labels.get('current_price_label', '现价')}: "
-                f"{price_data.get('current_price', 'N/A')} | "
-                f"{labels.get('ma5_label', 'MA5')}: {price_data.get('ma5', 'N/A')} | "
-                f"{labels.get('ma20_label', 'MA20')}: {price_data.get('ma20', 'N/A')}"
-            )
+            price_parts = [
+                f"{labels.get('current_price_label', '现价')}: {price_data.get('current_price', 'N/A')}",
+                f"{labels.get('ma5_label', 'MA5')}: {price_data.get('ma5', 'N/A')}",
+                f"{labels.get('ma20_label', 'MA20')}: {price_data.get('ma20', 'N/A')}",
+            ]
+            amount = price_data.get("amount")
+            if amount not in (None, "", "N/A"):
+                price_parts.append(
+                    f"{labels.get('turnover_amount_label', '成交额')}: "
+                    f"{notifier._format_amount_cn(amount, None)}"
+                )
+            lines.append("💲 " + " | ".join(price_parts))
         if vol_data:
             vol_parts = [
                 f"{labels.get('volume_ratio_label', '量比')} {vol_data.get('volume_ratio', 'N/A')}"

@@ -938,7 +938,7 @@ def fill_chip_structure_if_needed(result: "AnalysisResult", chip_data: Any) -> N
         logger.warning("[chip_structure] Fill failed, skipping: %s", e)
 
 
-_PRICE_POS_KEYS = ("ma5", "ma10", "ma20", "bias_ma5", "bias_status", "current_price", "support_level", "resistance_level")
+_PRICE_POS_KEYS = ("ma5", "ma10", "ma20", "bias_ma5", "bias_status", "current_price", "support_level", "resistance_level", "amount")
 
 
 def fill_price_position_if_needed(
@@ -979,6 +979,8 @@ def fill_price_position_if_needed(
             )
             if _is_value_placeholder(computed.get("current_price")):
                 computed["current_price"] = rq.get("price")
+            if _is_value_placeholder(computed.get("amount")):
+                computed["amount"] = rq.get("amount")
 
         filled = False
         for k in _PRICE_POS_KEYS:

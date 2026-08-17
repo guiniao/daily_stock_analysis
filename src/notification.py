@@ -2221,6 +2221,20 @@ class NotificationService(
         institution_block = ctx.get("institution") if isinstance(ctx.get("institution"), dict) else {}
         institution_data = institution_block.get("data") if isinstance(institution_block.get("data"), dict) else {}
 
+        # 资金流（东财/同花顺回退）——主力净流入/5日/10日 + 板块资金排行榜
+        capital_flow_block = ctx.get("capital_flow") if isinstance(ctx.get("capital_flow"), dict) else {}
+        capital_flow_data = capital_flow_block.get("data") if isinstance(capital_flow_block.get("data"), dict) else {}
+        stock_flow = capital_flow_data.get("stock_flow") if isinstance(capital_flow_data.get("stock_flow"), dict) else {}
+        sector_rankings = capital_flow_data.get("sector_rankings") if isinstance(capital_flow_data.get("sector_rankings"), dict) else {}
+
+        # 股东户数（筹码代理）
+        shareholder_block = ctx.get("shareholder_count") if isinstance(ctx.get("shareholder_count"), dict) else {}
+        shareholder_data = shareholder_block.get("data") if isinstance(shareholder_block.get("data"), dict) else {}
+
+        # 龙虎榜
+        dragon_block = ctx.get("dragon_tiger") if isinstance(ctx.get("dragon_tiger"), dict) else {}
+        dragon_data = dragon_block.get("data") if isinstance(dragon_block.get("data"), dict) else {}
+
         return {
             "financial_report": financial_report,
             "growth": growth_data,
@@ -2232,6 +2246,10 @@ class NotificationService(
             "concept_bottom": concept_bottom,
             "institution": institution_data,
             "institution_status": institution_block.get("status"),
+            "stock_flow": stock_flow,
+            "sector_rankings": sector_rankings,
+            "shareholder": shareholder_data,
+            "dragon_tiger": dragon_data,
         }
 
     def _append_fundamental_blocks(self, lines: List[str], result: AnalysisResult) -> None:
@@ -2248,6 +2266,10 @@ class NotificationService(
         self._append_financial_summary(lines, blocks, labels)
         self._append_shareholder_return(lines, blocks, labels)
         self._append_institutional_flow(lines, blocks, labels)
+        self._append_ashare_institutional_flow(lines, blocks, labels)
+        self._append_shareholder_count(lines, blocks, labels)
+        self._append_capital_flow(lines, blocks, labels)
+        self._append_dragon_tiger(lines, blocks, labels)
         self._append_related_boards(lines, blocks, labels)
 
     def _append_financial_summary(
@@ -2393,6 +2415,156 @@ class NotificationService(
             f"| {cells['foreign']} | {cells['trust']} | {cells['dealer']} | {cells['total']} |",
             "",
         ])
+
+    def _append_ashare_institutional_flow(
+        self,
+        lines: List[str],
+        blocks: Dict[str, Any],
+        labels: Dict[str, str],
+    ) -> None:
+        """A股机构持股变化（台股三大法人走 _append_institutional_flow，A股走这里）。"""
+        inst = blocks.get("institution") or {}
+        holding_change = inst.get("institution_holding_change")
+        top10_change = inst.get("top10_holder_change")
+        if holding_change is None and top10_change is None:
+            return
+        lines.append(f"### 🏦 {labels.get('ashare_institution_heading', '机构动向')}")
+        if holding_change is not None:
+            lines.append(f"- 机构持股变化: {self._format_percent(holding_change)}")
+        if top10_change is not None:
+            lines.append(f"- 十大股东持股变化: {self._format_percent(top10_change)}")
+        lines.append("")
+
+    def _append_shareholder_count(
+        self,
+        lines: List[str],
+        blocks: Dict[str, Any],
+        labels: Dict[str, str],
+    ) -> None:
+        """股东户数变化（筹码代理：户数下降=筹码集中，上升=筹码分散）。"""
+        sc = blocks.get("shareholder") or {}
+        holder_count = sc.get("holder_count")
+        if holder_count is None:
+            return
+        change_pct = sc.get("change_pct")
+        report_date = sc.get("report_date")
+        count_str = self._format_shareholder_count(holder_count)
+        change_pct_str = self._format_percent(change_pct) if isinstance(change_pct, (int, float)) else "N/A"
+        if isinstance(change_pct, (int, float)):
+            if change_pct < 0:
+                meaning = "筹码集中"
+            elif change_pct > 0:
+                meaning = "筹码分散"
+            else:
+                meaning = "持平"
+        else:
+            meaning = "—"
+        lines.extend([
+            f"### 👥 {labels.get('shareholder_count_heading', '股东户数（筹码代理）')}",
+            "",
+            (
+                f"| {labels.get('shareholder_count_label', '股东户数')} | 较上期变化 | "
+                f"{labels.get('shareholder_report_date_label', '报告期')} | 含义 |"
+            ),
+            "|-----:|-----:|:--------:|------|",
+            (
+                f"| {count_str} | {change_pct_str} | "
+                f"{self._format_text(report_date)} | {meaning} |"
+            ),
+            "",
+        ])
+
+    @classmethod
+    def _format_shareholder_count(cls, value: Any) -> str:
+        """20.9 万户 / 320400 户。"""
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "N/A"
+        if n != n:  # NaN
+            return "N/A"
+        if n >= 10000:
+            return f"{n / 10000:.2f} 万户"
+        return f"{n:.0f} 户"
+
+    def _append_capital_flow(
+        self,
+        lines: List[str],
+        blocks: Dict[str, Any],
+        labels: Dict[str, str],
+    ) -> None:
+        """资金流向：主力净流入/5日/10日 + 板块资金流入流出榜。"""
+        stock_flow = blocks.get("stock_flow") or {}
+        sector_rankings = blocks.get("sector_rankings") or {}
+        has_flow = bool(stock_flow) and any(v is not None for v in stock_flow.values())
+        has_sector = bool(sector_rankings.get("top")) or bool(sector_rankings.get("bottom"))
+        if not has_flow and not has_sector:
+            return
+        lines.append(f"### 💰 {labels.get('capital_flow_heading', '资金流向')}")
+        if has_flow:
+            lines.extend([
+                (
+                    f"| {labels.get('main_net_inflow_label', '主力净流入')} | "
+                    f"{labels.get('flow_5d_label', '5日净流入')} | "
+                    f"{labels.get('flow_10d_label', '10日净流入')} |"
+                ),
+                "|-----:|-----:|-----:|",
+                (
+                    f"| {self._format_signed_amount_cn(stock_flow.get('main_net_inflow'))} | "
+                    f"{self._format_signed_amount_cn(stock_flow.get('inflow_5d'))} | "
+                    f"{self._format_signed_amount_cn(stock_flow.get('inflow_10d'))} |"
+                ),
+            ])
+        if has_sector:
+            top = sector_rankings.get("top", [])[:3]
+            bottom = sector_rankings.get("bottom", [])[:3]
+            top_text = "、".join(
+                f"{i.get('name')}({self._format_signed_amount_cn(i.get('net_inflow'))})"
+                for i in top if isinstance(i, dict) and i.get("name")
+            ) or "N/A"
+            bottom_text = "、".join(
+                f"{i.get('name')}({self._format_signed_amount_cn(i.get('net_inflow'))})"
+                for i in bottom if isinstance(i, dict) and i.get("name")
+            ) or "N/A"
+            lines.append(f"- {labels.get('inflow_boards_label', '资金流入靠前板块')}: {top_text}")
+            lines.append(f"- {labels.get('outflow_boards_label', '资金流出靠前板块')}: {bottom_text}")
+        lines.append("")
+
+    @classmethod
+    def _format_signed_amount_cn(cls, value: Any) -> str:
+        """带正负号的金额（亿/万），+9385 万 / -3.13 亿。"""
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "N/A"
+        if n != n:  # NaN
+            return "N/A"
+        sign = "+" if n > 0 else ("-" if n < 0 else "")
+        a = abs(n)
+        if a >= 1e8:
+            return f"{sign}{a / 1e8:.2f} 亿"
+        if a >= 1e4:
+            return f"{sign}{a / 1e4:.2f} 万"
+        return f"{sign}{a:.0f}"
+
+    def _append_dragon_tiger(
+        self,
+        lines: List[str],
+        blocks: Dict[str, Any],
+        labels: Dict[str, str],
+    ) -> None:
+        """龙虎榜异动（仅上榜时渲染）。"""
+        dt = blocks.get("dragon_tiger") or {}
+        if not dt.get("is_on_list"):
+            return
+        count = dt.get("recent_count", 0)
+        latest = dt.get("latest_date", "N/A")
+        lines.append(f"### 🐉 {labels.get('dragon_tiger_heading', '龙虎榜')}")
+        lines.append(
+            f"- {labels.get('dragon_tiger_row_label', '近期上榜')} {count} 次"
+            f"（{self._format_text(latest)}），游资/机构席位异动参考"
+        )
+        lines.append("")
 
     def _append_related_boards(
         self,

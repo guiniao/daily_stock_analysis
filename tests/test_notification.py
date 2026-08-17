@@ -1401,6 +1401,75 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("| 板块 | 类型 | 板块表现 | 板块涨跌幅 |", out)
 
     @mock.patch("src.notification.get_config")
+    def test_single_stock_report_appends_capital_flow_shareholder_dragon(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="600584",
+            name="长电科技",
+            sentiment_score=60,
+            trend_prediction="看多",
+            operation_advice="持有",
+            analysis_summary="测试",
+        )
+        result.fundamental_context = {
+            **self._make_fundamental_context(),
+            "capital_flow": {
+                "status": "ok",
+                "data": {
+                    "stock_flow": {
+                        "main_net_inflow": 1.596e9,
+                        "inflow_5d": 2.208e9,
+                        "inflow_10d": 2.208e9,
+                    },
+                    "sector_rankings": {
+                        "top": [{"name": "半导体", "net_inflow": 3.2e9}],
+                        "bottom": [{"name": "煤炭", "net_inflow": -1.2e8}],
+                    },
+                },
+            },
+            "shareholder_count": {
+                "status": "ok",
+                "data": {
+                    "holder_count": 320400,
+                    "change_pct": -12.67,
+                    "report_date": "2026-03-31",
+                },
+            },
+            "dragon_tiger": {
+                "status": "ok",
+                "data": {"is_on_list": True, "recent_count": 2, "latest_date": "2026-08-06"},
+            },
+            "institution": {
+                "status": "partial",
+                "data": {"institution_holding_change": -3.0},
+            },
+        }
+
+        out = service.generate_single_stock_report(result)
+
+        # 资金流向：主力净流入/5日/10日 + 板块资金榜
+        self.assertIn("资金流向", out)
+        self.assertIn("主力净流入", out)
+        self.assertIn("+15.96 亿", out)
+        self.assertIn("+22.08 亿", out)
+        self.assertIn("半导体(+32.00 亿)", out)
+        self.assertIn("煤炭(-1.20 亿)", out)
+        # 股东户数（筹码代理）
+        self.assertIn("股东户数", out)
+        self.assertIn("32.04 万户", out)
+        self.assertIn("-12.67%", out)
+        # 龙虎榜
+        self.assertIn("龙虎榜", out)
+        self.assertIn("近期上榜 2 次", out)
+        # A股机构动向
+        self.assertIn("机构动向", out)
+        self.assertIn("机构持股变化", out)
+        self.assertIn("-3.00%", out)
+
+    @mock.patch("src.notification.get_config")
     def test_related_boards_uses_concept_rankings_for_concept_boards(
         self, mock_get_config: mock.MagicMock
     ):
