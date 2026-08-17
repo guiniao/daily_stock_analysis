@@ -3224,7 +3224,9 @@ class StockAnalysisPipeline:
             )
         
         results: List[AnalysisResult] = []
-        
+        # Fork 扩展：并发阶段失败/丢失的股票，结束后串行重试，避免整批被静默丢弃
+        failed_codes: List[str] = []
+
         # 使用线程池并发处理
         # 注意：max_workers 设置较低（默认3）以避免触发反爬
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -3260,6 +3262,10 @@ class StockAnalysisPipeline:
                             f"[{code}] 分析结果标记为失败，不计入汇总: "
                             f"{result.error_message or '未知原因'}"
                         )
+                        failed_codes.append(code)
+                    else:
+                        logger.warning(f"[{code}] 分析未返回有效结果（None），记为失败")
+                        failed_codes.append(code)
 
                     # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
                     if idx < len(stock_codes) - 1 and analysis_delay > 0:
@@ -3272,6 +3278,45 @@ class StockAnalysisPipeline:
 
                 except Exception as e:
                     logger.error(f"[{code}] 任务执行失败: {e}")
+                    failed_codes.append(code)
+
+        # Fork 扩展：并发阶段失败/丢失的股票，串行重试（消除并发导致的
+        # 限流/超时/数据源竞争/mini-racer 崩溃等因素，保证失败股票有第二次机会）。
+        # 注意：单股推送模式与合并模式下，重试成功的股票同样进入 results，由下方统一发送。
+        if failed_codes and not dry_run:
+            logger.info(
+                "===== 并发阶段 %s 只未成功，开始串行重试: %s =====",
+                len(failed_codes),
+                ", ".join(failed_codes),
+            )
+            for code in failed_codes:
+                try:
+                    retry_result = self.process_single_stock(
+                        code,
+                        skip_analysis=False,
+                        single_stock_notify=False,
+                        report_type=report_type,
+                        analysis_query_id=uuid.uuid4().hex,
+                        current_time=resume_reference_time,
+                    )
+                    if retry_result and retry_result.success:
+                        results.append(retry_result)
+                        logger.info(f"[{code}] 串行重试成功")
+                        if single_stock_notify and send_notification:
+                            self._send_single_stock_notification(
+                                retry_result,
+                                report_type=report_type,
+                                fallback_code=code,
+                            )
+                    else:
+                        err = (
+                            retry_result.error_message
+                            if retry_result
+                            else "返回 None（内部异常）"
+                        )
+                        logger.error(f"[STOCK_FAILED] {code} 串行重试仍失败: {err}")
+                except Exception as e:
+                    logger.error(f"[STOCK_FAILED] {code} 串行重试异常: {e}")
         
         # 统计
         elapsed_time = time.time() - start_time
