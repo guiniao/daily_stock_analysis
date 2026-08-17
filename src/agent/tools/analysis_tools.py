@@ -23,9 +23,12 @@ _ANALYSIS_READ_POLICY = ToolPolicy.declared(
 
 def _fetch_trend_data(stock_code: str):
     """Fetch historical OHLCV (DataFrame) for trend analysis. DB first, then DataFetcher fallback."""
+    from src.config import get_config
     from src.services.history_loader import load_history_df
 
-    df, _ = load_history_df(stock_code, days=60)
+    # 60 天不足以计算月线 MA3/MA6，与主 pipeline 的 technical_history_days 保持一致
+    history_days = getattr(get_config(), "technical_history_days", 260)
+    df, _ = load_history_df(stock_code, days=history_days)
     return df
 
 
@@ -84,6 +87,13 @@ def _handle_analyze_trend(stock_code: str) -> dict:
         "signal_score": result.signal_score,
         "signal_reasons": result.signal_reasons,
         "risk_factors": result.risk_factors,
+        # 周线/月线跨周期字段（由日K重采样，用于跨周期确认）
+        "weekly_ma5": result.weekly_ma5,
+        "weekly_ma10": result.weekly_ma10,
+        "monthly_ma3": result.monthly_ma3,
+        "monthly_ma6": result.monthly_ma6,
+        "weekly_trend": result.weekly_trend,
+        "monthly_trend": result.monthly_trend,
     }
 
 

@@ -86,6 +86,27 @@ class TestGetStockInfoContract(unittest.TestCase):
             result["sector_rankings"],
         )
 
+    def test_get_stock_info_preserves_shareholder_count_block(self) -> None:
+        """股东户数（筹码代理）块必须出现在工具返回中，Agent 才能看到筹码集中信号。"""
+        manager = _DummyManager()
+        manager._context["shareholder_count"] = {
+            "status": "ok",
+            "data": {
+                "holder_count": 194000,
+                "prev_count": 209000,
+                "change": -15000,
+                "change_pct": -7.18,
+                "report_date": "2026-06-30",
+            },
+        }
+        with patch("src.agent.tools.data_tools._get_fetcher_manager", return_value=manager):
+            result = _handle_get_stock_info("600519")
+
+        sc = result["fundamental_context"]["shareholder_count"]
+        self.assertEqual(sc["status"], "ok")
+        self.assertEqual(sc["data"]["holder_count"], 194000)
+        self.assertEqual(sc["data"]["change_pct"], -7.18)
+
 
 if __name__ == "__main__":
     unittest.main()
