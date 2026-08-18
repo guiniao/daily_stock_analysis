@@ -5,6 +5,8 @@ from datetime import date, datetime, timezone
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
+
 from src.analyzer import AnalysisResult
 from src.core.pipeline import StockAnalysisPipeline
 
@@ -30,10 +32,13 @@ class PipelineFetchErrorTestCase(unittest.TestCase):
     )
     def test_fetch_and_save_uses_effective_trading_date_for_resume_check(self, _mock_target):
         pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.config = MagicMock(technical_history_days=260)
         pipeline.fetcher_manager = MagicMock()
         pipeline.db = MagicMock()
         pipeline.fetcher_manager.get_stock_name.return_value = "贵州茅台"
         pipeline.db.has_today_data.return_value = True
+        # 历史深度足够（>=130条），命中断点续传跳过
+        pipeline.db.get_data_range.return_value = [MagicMock()] * 200
         current_time = datetime(2026, 3, 28, 1, 0, tzinfo=timezone.utc)
 
         success, error = StockAnalysisPipeline.fetch_and_save_stock_data(
@@ -47,6 +52,29 @@ class PipelineFetchErrorTestCase(unittest.TestCase):
         _mock_target.assert_called_once_with("600519", current_time=current_time)
         pipeline.db.has_today_data.assert_called_once_with("600519", date(2026, 3, 27))
         pipeline.fetcher_manager.get_daily_data.assert_not_called()
+
+    def test_fetch_and_save_refetches_when_history_depth_shallow(self):
+        """已有今日数据但历史深度不足（新股票）时，重新拉取补齐，否则周线/月线算不出。"""
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.config = MagicMock(technical_history_days=260)
+        pipeline.fetcher_manager = MagicMock()
+        pipeline.db = MagicMock()
+        pipeline.fetcher_manager.get_stock_name.return_value = "中巨芯"
+        pipeline.db.has_today_data.return_value = True
+        # 只有 40 条，远低于 130 阈值 -> 应重新拉取
+        pipeline.db.get_data_range.return_value = [MagicMock()] * 40
+        fake_df = pd.DataFrame({"close": [1.0]})
+        pipeline.fetcher_manager.get_daily_data.return_value = (fake_df, "tushare")
+        pipeline.db.save_daily_data.return_value = 260
+
+        success, error = StockAnalysisPipeline.fetch_and_save_stock_data(
+            pipeline, "688549", current_time=datetime(2026, 8, 18, 1, 0, tzinfo=timezone.utc)
+        )
+
+        self.assertTrue(success)
+        # 浅历史 -> 走了网络拉取，且窗口对齐 technical_history_days
+        pipeline.fetcher_manager.get_daily_data.assert_called_once_with("688549", days=260)
+        pipeline.db.save_daily_data.assert_called_once()
 
     def test_run_retries_failed_stocks_sequentially(self):
         """并发阶段失败的股票，结束后串行重试并纳入汇总，不再静默丢弃。"""

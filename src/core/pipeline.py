@@ -352,16 +352,27 @@ class StockAnalysisPipeline:
                 code, current_time=current_time
             )
 
-            # 断点续传检查：如果最新可复用交易日的数据已存在，则跳过
-            if not force_refresh and self.db.has_today_data(code, target_date):
-                logger.info(
-                    f"{stock_name}({code}) {target_date} 数据已存在，跳过获取（断点续传）"
-                )
-                return True, None
+            # 历史窗口需足够支撑 MA60 与周线/月线重采样（technical_history_days）
+            history_days = int(getattr(self.config, 'technical_history_days', 260))
 
-            # 从数据源获取数据
+            # 断点续传检查：已有今日数据且历史深度足够时跳过；
+            # 否则（历史不足，如新加入的股票）需重新拉取补齐，否则周线/月线会因数据不足算不出。
+            if not force_refresh and self.db.has_today_data(code, target_date):
+                depth_start = target_date - timedelta(days=history_days)
+                depth_bars = self.db.get_data_range(code, depth_start, target_date)
+                if len(depth_bars) >= int(history_days * 0.5):
+                    logger.info(
+                        f"{stock_name}({code}) {target_date} 数据已存在，跳过获取（断点续传）"
+                    )
+                    return True, None
+                logger.info(
+                    f"{stock_name}({code}) 历史深度不足（{len(depth_bars)}条 < "
+                    f"{int(history_days * 0.5)}条），重新拉取补齐"
+                )
+
+            # 从数据源获取数据（窗口对齐 technical_history_days，保证周线/月线有足够日K）
             logger.info(f"{stock_name}({code}) 开始从数据源获取数据...")
-            df, source_name = self.fetcher_manager.get_daily_data(code, days=30)
+            df, source_name = self.fetcher_manager.get_daily_data(code, days=history_days)
 
             if df is None or df.empty:
                 return False, "获取数据为空"
